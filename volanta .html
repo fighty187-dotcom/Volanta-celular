@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Volante Giroscópico - PC & Móvil</title>
+  <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+  <style>
+    * { box-sizing: border-box; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+    body { background: #121212; color: #fff; text-align: center; margin: 0; padding: 20px; }
+    .card { background: #1e1e1e; padding: 25px; border-radius: 12px; max-width: 450px; margin: 20px auto; box-shadow: 0 8px 24px rgba(0,0,0,0.5); }
+    button { background: #00e676; color: #000; border: none; padding: 12px 24px; font-size: 16px; font-weight: bold; border-radius: 8px; cursor: pointer; margin: 10px; transition: 0.2s; }
+    button:hover { background: #00c853; }
+    input { padding: 12px; font-size: 16px; border-radius: 8px; border: 1px solid #333; text-align: center; width: 80%; background: #2a2a2a; color: #fff; }
+    .hidden { display: none; }
+    #wheel-visual { width: 180px; height: 180px; border: 12px solid #555; border-top-color: #00e676; border-radius: 50%; margin: 20px auto; transition: transform 0.05s linear; }
+    .stat { font-size: 24px; font-weight: bold; color: #00e676; margin: 10px 0; }
+  </style>
+</head>
+<body>
+
+  <h1>Volante Giroscópico</h1>
+
+  <!-- SELECCIÓN DE MODO -->
+  <div id="setup-screen" class="card">
+    <h2>Selecciona tu dispositivo</h2>
+    <button onclick="initPC()">Modo PC (Receptor)</button>
+    <button onclick="initMobile()">Modo Celular (Volante)</button>
+  </div>
+
+  <!-- INTERFAZ PC -->
+  <div id="pc-screen" class="card hidden">
+    <h2>Modo PC</h2>
+    <p>Código de conexión:</p>
+    <div id="peer-id" class="stat">Generando...</div>
+    <p>Ángulo recibido:</p>
+    <div id="pc-angle" class="stat">0°</div>
+    <div id="wheel-visual"></div>
+  </div>
+
+  <!-- INTERFAZ CELULAR -->
+  <div id="mobile-screen" class="card hidden">
+    <h2>Modo Celular</h2>
+    <div id="connect-box">
+      <p>Introduce el código que aparece en la PC:</p>
+      <input type="text" id="target-id" placeholder="Ejemplo: 1234"><br><br>
+      <button onclick="connectToPC()">Conectar Volante</button>
+    </div>
+    
+    <div id="controls-box" class="hidden">
+      <button onclick="requestGyroPermission()">Activar Giroscopio</button>
+      <div id="mobile-angle" class="stat">0°</div>
+      <div id="wheel-visual" id="mobile-wheel"></div>
+      <p>Gira tu celular horizontalmente como un volante.</p>
+    </div>
+  </div>
+
+  <script>
+    let peer = null;
+    let conn = null;
+
+    // Inicializar Modo PC
+    function initPC() {
+      document.getElementById('setup-screen').classList.add('hidden');
+      document.getElementById('pc-screen').classList.remove('hidden');
+
+      // Generar ID de 4 dígitos
+      const customId = "VOLANTE-" + Math.floor(1000 + Math.random() * 9000);
+      peer = new Peer(customId);
+
+      peer.on('open', (id) => {
+        document.getElementById('peer-id').innerText = id;
+      });
+
+      peer.on('connection', (c) => {
+        conn = c;
+        conn.on('data', (data) => {
+          if (data.angle !== undefined) {
+            document.getElementById('pc-angle').innerText = `${Math.round(data.angle)}°`;
+            document.getElementById('wheel-visual').style.transform = `rotate(${data.angle}deg)`;
+            
+            // Enviar vía WebSocket local al script de la PC (si está activo)
+            if (window.localBridge && window.localBridge.readyState === WebSocket.OPEN) {
+              window.localBridge.send(JSON.stringify({ angle: data.angle }));
+            }
+          }
+        });
+      });
+
+      // WebSocket local para comunicarse con el script de Python
+      connectLocalBridge();
+    }
+
+    function connectLocalBridge() {
+      window.localBridge = new WebSocket('ws://localhost:8765');
+      window.localBridge.onerror = () => setTimeout(connectLocalBridge, 3000);
+    }
+
+    // Inicializar Modo Celular
+    function initMobile() {
+      document.getElementById('setup-screen').classList.add('hidden');
+      document.getElementById('mobile-screen').classList.remove('hidden');
+      peer = new Peer();
+    }
+
+    function connectToPC() {
+      const targetId = document.getElementById('target-id').value.trim();
+      if (!targetId) return alert('Ingresa un código válido');
+
+      conn = peer.connect(targetId);
+      conn.on('open', () => {
+        document.getElementById('connect-box').classList.add('hidden');
+        document.getElementById('controls-box').classList.remove('hidden');
+      });
+    }
+
+    function requestGyroPermission() {
+      if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+        DeviceOrientationEvent.requestPermission()
+          .then(permissionState => {
+            if (permissionState === 'granted') {
+              window.addEventListener('deviceorientation', handleOrientation);
+            }
+          })
+          .catch(console.error);
+      } else {
+        window.addEventListener('deviceorientation', handleOrientation);
+      }
+    }
+
+    function handleOrientation(event) {
+      // Usar la inclinación lateral (gamma) para rotación en modo horizontal
+      let angle = event.gamma || 0; 
+
+      // Limitar a un rango razonable (-90° a 90°)
+      if (angle > 90) angle = 90;
+      if (angle < -90) angle = -90;
+
+      document.getElementById('mobile-angle').innerText = `${Math.round(angle)}°`;
+      
+      // Enviar datos a la PC
+      if (conn && conn.open) {
+        conn.send({ angle: angle });
+      }
+    }
+  </script>
+</body>
+</html>
